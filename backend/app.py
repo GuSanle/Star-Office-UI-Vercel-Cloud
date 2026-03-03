@@ -272,6 +272,9 @@ if not os.path.exists(STATE_FILE):
 @app.route("/", methods=["GET"])
 def index():
     """Serve the pixel office UI with built-in version cache busting"""
+    # 每次打开页面时，随机应用一张收藏地图（若存在）
+    _maybe_apply_random_home_favorite()
+
     with open(os.path.join(FRONTEND_DIR, "index.html"), "r", encoding="utf-8") as f:
         html = f.read()
     html = html.replace("{{VERSION_TIMESTAMP}}", VERSION_TIMESTAMP)
@@ -415,6 +418,34 @@ def _save_home_favorites_index(data):
     _ensure_home_favorites_index()
     with open(HOME_FAVORITES_INDEX_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def _maybe_apply_random_home_favorite():
+    """On page open, randomly apply one saved home favorite if available."""
+    try:
+        idx = _load_home_favorites_index()
+        items = idx.get("items") or []
+        candidates = []
+        for it in items:
+            rel = (it.get("path") or "").strip()
+            if not rel:
+                continue
+            abs_path = os.path.join(ROOT_DIR, rel)
+            if os.path.exists(abs_path):
+                candidates.append((rel, abs_path))
+
+        if not candidates:
+            return False, "no-favorites"
+
+        rel, src = random.choice(candidates)
+        target = FRONTEND_PATH / "office_bg_small.webp"
+        if not target.exists():
+            return False, "missing-office-bg"
+
+        shutil.copy2(src, str(target))
+        return True, rel
+    except Exception as e:
+        return False, str(e)
 
 
 def load_join_keys():
