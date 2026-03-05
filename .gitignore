@@ -1,4 +1,4 @@
-# Python
+# Python environment
 __pycache__/
 *.py[cod]
 *.pyo
@@ -8,13 +8,13 @@ __pycache__/
 venv/
 .env
 
-# OS
+# OS/editor
 .DS_Store
 
-# Runtime / local files
+# Runtime state (local only)
 state.json
 agents-state.json
-# keep join-keys.json in repo for first-run demo
+runtime-config.json
 *.log
 *.out
 *.pid
@@ -24,7 +24,15 @@ cloudflared.pid
 cloudflared.out
 healthcheck.log
 backend.log
-frontend/office_bg.png
-runtime-config.json
+
+# Generated / mutable assets (local only)
 assets/bg-history/
+assets/home-favorites/
+frontend/office_bg.png
 frontend/*.bak
+layers/
+desktop-pet/src-tauri/icons/*Logo.png
+
+# Electron local build artifacts
+electron-shell/node_modules/
+electron-shell/release/

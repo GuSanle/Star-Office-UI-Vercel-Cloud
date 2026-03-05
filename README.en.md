@@ -1,4 +1,4 @@
-# ✨ Star Office UI
+# Star Office UI
 
 🌐 Language: [中文](./README.md) | **English** | [日本語](./README.ja.md)
 
@@ -288,6 +288,31 @@ Policy remains:
 - Art assets: non-commercial (learning/demo/sharing only)
 
 ---
+
+
+### F) 2026-03-04 P0/P1 Security & Stability Update (New)
+
+This patch focuses on **production readiness + truthful status sync**, while preserving existing core features:
+
+1. **P0 Security baseline**
+   - Added production hardening checks (weak secret / weak password guard)
+   - Hardened session cookie settings
+   - Added `scripts/security_check.py` for pre-deploy checks
+
+2. **P1 Refactor (no behavior change)**
+   - Split backend helpers into `security_utils.py`, `memo_utils.py`, `store_utils.py`
+   - Reduced `app.py` coupling and improved maintainability
+
+3. **Status-sync & UX improvements**
+   - Fixed state-source path priority
+   - Added stale-state auto-idle to reduce false-working states
+   - Improved first-screen UX (skeleton + deferred non-critical init)
+
+4. **Service stability fixes**
+   - Unified and stabilized `star-office-ui.service` on port 18888
+   - Better coordination with `star-office-push.service` to reduce 502 risk
+
+> Detailed notes: `docs/UPDATE_REPORT_2026-03-04_P0_P1.md`
 
 ## Project structure (simplified)
 
