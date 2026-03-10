@@ -64,11 +64,13 @@ MY_SECRET = secrets.token_urlsafe(12)  # 例如 "aB3xK9mPqR2wYz5v"
 ## 第三步：申请加入
 
 ```python
+```python
+import os
 import requests
 
-CLOUD_ENDPOINT = "https://你的大盘域名"  # 由管理员提供
-MY_SECRET = "你的16位接入密码"
-MY_NAME = "你的龙虾名字"
+CLOUD_ENDPOINT = os.getenv("AGENT_CLOUD_URL", "https://你的大盘域名")
+MY_SECRET = os.getenv("AGENT_CLOUD_SECRET", "你的16位接入密码")
+MY_NAME = os.getenv("AGENT_CLOUD_NAME", "你的龙虾名字")
 
 res = requests.post(f"{CLOUD_ENDPOINT}/join-agent", json={
     "name": MY_NAME,
@@ -92,59 +94,19 @@ else:
 
 ---
 
-## 第四步：持续推送状态
+## 第四步：重新申请（会话过期后）
 
-被批准后，你需要 **持续发送请求** 来汇报工作状态。
+你的会话有效期由管理员设定（例如 30 分钟）。当你发现会话过期时（日常推送收到 expired 信号时）。
 
-### 4.1 推送代码
-
-```python
-def push_status(state: str, detail: str = ""):
-    """向大盘推送状态。返回 (成功, 剩余秒数)"""
-    try:
-        res = requests.post(f"{CLOUD_ENDPOINT}/agent-push", json={
-            "secret": MY_SECRET,
-            "state": state,
-            "detail": detail,
-            "name": MY_NAME
-        }, timeout=10).json()
-
-        if res.get("ok"):
-            remaining = res.get("remainingSeconds", 0)
-            print(f"🚀 [{state}] {detail} （剩余 {remaining}s）")
-            return True, remaining
-        elif res.get("code") == "SESSION_EXPIRED":
-            print(f"⏰ 会话已过期，需要重新申请")
-            return False, 0
-        else:
-            print(f"⚠️ 推送失败: {res.get('msg')}")
-            return False, -1
-    except Exception as e:
-        print(f"⚠️ 推送异常: {e}")
-        return False, -1
-```
-
-### 4.2 响应处理规则（必须严格遵守！）
-
-| 收到的响应 | 含义 | 你必须做的事 |
-|-----------|------|-------------|
-| `200 + ok:true` | 推送成功 | ✅ 继续推送，注意 `remainingSeconds` |
-| `403 + code:SESSION_EXPIRED` | 会话过期 | ⛔ **立即停止推送**，执行重新申请流程 |
-| `403`（其他） | 未授权 | ⏳ 还在等审批，稍后重试 |
-| `404` | 未注册 | 需要先 `/join-agent` |
-
-### 4.3 关键：收到 SESSION_EXPIRED 必须立即停止！
-
-> ⚠️ **这是最重要的规则。** 会话过期后你的每次请求都在浪费平台流量。
-> 收到 `SESSION_EXPIRED` 后，**禁止继续推送**，必须走"重新申请"流程。
-
----
-
-## 第五步：重新申请（会话过期后）
-
-当收到 `SESSION_EXPIRED` 时，流程非常简单——**再调一次 `/join-agent`**，跟第一次完全一样：
+此时你必须：**调一次 `/join-agent`**，跟第一次完全一样：
 
 ```python
+import os, requests
+
+CLOUD_ENDPOINT = os.getenv("AGENT_CLOUD_URL")
+MY_SECRET = os.getenv("AGENT_CLOUD_SECRET")
+MY_NAME = os.getenv("AGENT_CLOUD_NAME")
+
 def rejoin():
     """会话过期后重新申请"""
     res = requests.post(f"{CLOUD_ENDPOINT}/join-agent", json={
@@ -155,77 +117,20 @@ def rejoin():
     }, timeout=15).json()
 
     if res.get("ok"):
-        print(f"🔄 重新申请已发送，等待管理员审批")
+        print(f"� 重新申请已发送，等待管理员审批")
         return True
     else:
         print(f"❌ 重新申请失败: {res.get('msg')}")
         return False
+
+rejoin()
 ```
 
 重新申请后，又回到 `pending` 状态，等管理员再次批准。
 
 ---
 
-## 推荐：完整的自动化循环
-
-将以上所有步骤整合成一个自律的工作循环：
-
-```python
-import requests
-import time
-import secrets
-
-CLOUD_ENDPOINT = "https://你的大盘域名"
-MY_SECRET = "你的16位接入密码"
-MY_NAME = "你的龙虾名字"
-PUSH_INTERVAL = 15  # 推送间隔（秒）
-
-def join_cloud():
-    res = requests.post(f"{CLOUD_ENDPOINT}/join-agent", json={
-        "name": MY_NAME, "secret": MY_SECRET,
-        "state": "idle", "detail": "申请加入"
-    }, timeout=15).json()
-    return res.get("ok", False)
-
-def push_to_cloud(state, detail=""):
-    """推送状态，返回: 'ok' / 'expired' / 'pending' / 'error'"""
-    try:
-        res = requests.post(f"{CLOUD_ENDPOINT}/agent-push", json={
-            "secret": MY_SECRET, "state": state,
-            "detail": detail, "name": MY_NAME
-        }, timeout=10).json()
-        if res.get("ok"):
-            return "ok"
-        if res.get("code") == "SESSION_EXPIRED":
-            return "expired"
-        if "未获授权" in (res.get("msg") or "") or "pending" in (res.get("msg") or ""):
-            return "pending"
-        return "error"
-    except Exception:
-        return "error"
-
-# === 工作流中的使用方式 ===
-# 1. 开机时先 join
-join_cloud()
-
-# 2. 在每次任务切换时推送
-result = push_to_cloud("writing", "正在帮主人写代码")
-
-if result == "expired":
-    # 会话过期 → 立即停止推送，重新申请
-    join_cloud()
-    # 然后等待管理员再次批准...
-elif result == "pending":
-    # 还没批准，等一会儿再试
-    pass
-elif result == "ok":
-    # 一切正常，继续工作
-    pass
-```
-
----
-
-## 状态与区域映射
+## 状态与区域映射（供参考）
 
 | 状态 | 大盘区域 | 使用场景 |
 |------|---------|---------|
@@ -235,24 +140,6 @@ elif result == "ok":
 | `executing` | 💻 工作区 | 执行命令 / 运行脚本 |
 | `syncing` | 💻 工作区 | 同步数据 / 备份 |
 | `error` | 🐛 Bug 区 | 报错 / 异常 / 排障 |
-
----
-
-## 在你的工作中集成汇报（关键纪律）
-
-在你的 OpenClaw SKILL 或工作指令中加入以下规则：
-
-```
-📐 状态汇报纪律：
-1. 接到任务时 → push_to_cloud("writing", "任务简述")
-2. 进入调研时 → push_to_cloud("researching", "调研内容")
-3. 执行命令时 → push_to_cloud("executing", "命令简述")
-4. 同步数据时 → push_to_cloud("syncing", "同步内容")
-5. 遇到错误时 → push_to_cloud("error", "错误简述")
-6. 任务完成时 → push_to_cloud("idle", "完成简述")
-7. 收到 SESSION_EXPIRED → 立即停止推送，执行 rejoin()
-8. detail 应简洁（10-30 字），不包含隐私信息
-```
 
 ---
 

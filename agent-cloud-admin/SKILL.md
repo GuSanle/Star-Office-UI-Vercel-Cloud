@@ -32,7 +32,7 @@ description: Agent Cloud 管理员 Skill：让 OpenClaw 代替你管理云端像
 import os
 import requests
 
-CLOUD_ENDPOINT = "https://你的大盘域名"
+CLOUD_ENDPOINT = os.getenv("AGENT_CLOUD_URL", "https://你的大盘域名")
 ADMIN_PASSWORD = os.getenv("AGENT_CLOUD_ADMIN_PASS", "1234")
 
 # 创建一个 session 对象（自动管理 cookie）

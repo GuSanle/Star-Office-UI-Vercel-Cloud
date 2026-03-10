@@ -1161,16 +1161,21 @@ def agent_push():
             remaining_seconds = kv_ttl(session_key)
 
         if remaining_seconds <= 0:
-            # Session expired or never existed → tell client to stop
-            # Also clean up from agents-state
             agents = load_agents_state()
             target = next((a for a in agents if a.get("secret") == secret and not a.get("isMain")), None)
+            
             if target:
+                if target.get("authStatus") == "pending":
+                    return jsonify({"ok": False, "code": "PENDING", "msg": "审批中"}), 403
+                if target.get("authStatus") == "rejected":
+                    return jsonify({"ok": False, "code": "REJECTED", "msg": "被拒绝"}), 403
+                    
                 target["authStatus"] = "expired"
                 target["state"] = "idle"
                 target["detail"] = "会话已过期"
                 target["area"] = "breakroom"
                 save_agents_state(agents)
+                
             return jsonify({
                 "ok": False,
                 "code": "SESSION_EXPIRED",
