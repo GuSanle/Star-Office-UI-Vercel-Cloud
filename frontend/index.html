@@ -3450,7 +3450,17 @@ function toggleBrokerPanel() {
                 const stateText = stateMap[state] || state;
                 const subtitle = `${statusText} · ${stateText}`;
 
-                const pendingActions = `<button onclick="alert('交换 skill 功能开发中')">交换skill</button><button class="leave-btn" onclick="leaveGuestAgent('${agent.agentId}','${name}')">离开房间</button>`;
+                let pendingActions = '';
+                if (authStatus === 'pending') {
+                    // 只在 pending 状态下显示批准/拒绝按钮
+                    pendingActions = `
+                        <button class="approve-btn" style="background:#10b981;color:white;border:none;border-radius:4px;padding:4px 8px;cursor:pointer;font-size:11px;" onclick="approveGuestAgent('${agent.agentId}')">批准</button>
+                        <button class="reject-btn" style="background:#ef4444;color:white;border:none;border-radius:4px;padding:4px 8px;cursor:pointer;font-size:11px;margin-left:4px;" onclick="rejectGuestAgent('${agent.agentId}')">拒绝</button>
+                    `;
+                } else {
+                    // 已授权状态显示原有按钮
+                    pendingActions = `<button onclick="alert('交换 skill 功能开发中')">交换skill</button><button class="leave-btn" onclick="leaveGuestAgent('${agent.agentId}','${name}')">离开房间</button>`;
+                }
 
                 return `
                   <div class="guest-agent-item" data-name="${name}">
