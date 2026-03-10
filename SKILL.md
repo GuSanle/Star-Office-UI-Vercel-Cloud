@@ -155,22 +155,63 @@ cloudflared tunnel --url http://127.0.0.1:19000
 
 ---
 
-## 6. 邀请其他龙虾加入（可选）
+## 6. 邀请其他龙虾加入 / 自己接入云端大盘 (最重要)
 
-如果有其他 OpenClaw 想加入你主人的办公室：
+当你把这个看板部署到云端后，你需要使用 **Python 客户端或 HTTP API** 将你的状态同步上去。
+新版本采用了**强管控的人工审批流**。
 
-### 步骤 A：告诉其他龙虾用 office-agent-push.py
+### 步骤 A：下载或集成纯净版 SDK
 
-你可以让其他龙虾：
-1) 下载 `office-agent-push.py`（可以直接从你这个仓库拿）
-2) 让它调用 `join-agent` + 周期 `agent-push`
-3) 你主人那边就能看到它进办公室了
+你可以使用以下代码来创建一个专属的 Agent 上报脚本（例如 `my_agent_client.py`），它没有复杂的依赖，只需要 `requests` 库：
 
-### 步骤 B：join key 说明
+```python
+import requests
+import time
 
-- 仓库里默认有 `join-keys.json`（`ocj_starteam01` ~ `ocj_starteam08`）
-- 同一个 key 最多 3 人同时在线
-- 你也可以帮主人新建自己的 key
+class AgentCloudClient:
+    def __init__(self, endpoint: str, join_key: str, agent_name: str):
+        self.endpoint = endpoint.rstrip('/')
+        self.join_key = join_key
+        self.name = agent_name
+        self.agent_id = None
+
+    def join(self, initial_state="idle", detail="准备就绪"):
+        url = f"{self.endpoint}/join-agent"
+        payload = {"name": self.name, "state": initial_state, "detail": detail, "joinKey": self.join_key}
+        res = requests.post(url, json=payload).json()
+        if res.get("ok"):
+            self.agent_id = res.get("agentId")
+            print(f"✅ 入场申请已发送，等待管理员在大盘网页右侧【抽屉】内审批！")
+            print(f"你的专属ID是: {self.agent_id}")
+        else:
+            print(f"❌ 申请失败: {res.get('msg')}")
+
+    def update_status(self, state: str, detail: str = ""):
+        if not self.agent_id: return
+        url = f"{self.endpoint}/agent-push"
+        payload = {"agentId": self.agent_id, "joinKey": self.join_key, "state": state, "detail": detail, "name": self.name}
+        res = requests.post(url, json=payload).json()
+        if res.get("ok"): print(f"🚀 状态更新: [{state}] {detail}")
+
+# 使用方式：
+# agent = AgentCloudClient("https://你的vercel域名.vercel.app", "ocj_example_team_01", "超级龙虾")
+# agent.join()
+# agent.update_status("writing", "正在写代码")
+```
+
+### 步骤 B：管理员审批（必须环节）
+
+1. 当你的 Agent 执行了 `join()` 之后，它**不会立刻出现**在大盘里。
+2. 你（大盘主人）必须打开 Vercel 的页面。
+3. 点击右侧边缘打开隐藏抽屉。
+4. 输入你的 `ASSET_DRAWER_PASS` 密码。
+5. 在抽屉底部的“访客列表”里找到刚刚申请的 Agent（显示为“待授权”），点击绿色的 **[批准]** 按钮。
+6. 批准后，Agent 继续执行 `update_status()`，小人就会立刻在大盘里开始干活！
+
+### 步骤 C：join key 说明
+
+- 你能在项目根目录 `join-keys.sample.json` 中找到默认的白名单秘钥。
+- 可以自行在那个 JSON 里修改或增加专属 Key 再推送部署。
 
 ---
 
