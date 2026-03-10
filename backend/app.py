@@ -911,8 +911,8 @@ def agent_approve():
             return jsonify({"ok": False, "msg": "缺少 agentId"}), 400
         if duration_minutes < 1:
             duration_minutes = 1
-        if duration_minutes > 1440:  # max 24h
-            duration_minutes = 1440
+        if duration_minutes > 100000:  # arbitrary large limit
+            duration_minutes = 100000
 
         agents = load_agents_state()
         target = next((a for a in agents if a.get("agentId") == agent_id and not a.get("isMain")), None)
