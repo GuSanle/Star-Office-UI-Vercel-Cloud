@@ -13,6 +13,12 @@ import subprocess
 import tempfile
 import threading
 from pathlib import Path
+import sys
+import os
+
+# Ensure Vercel can resolve local imports within the backend/ directory
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 from security_utils import is_production_mode, is_strong_secret, is_strong_drawer_pass
 from memo_utils import get_yesterday_date_str, extract_memo_from_file
 from store_utils import (
