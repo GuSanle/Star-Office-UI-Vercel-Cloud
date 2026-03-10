@@ -890,6 +890,10 @@ def get_agents():
 @app.route("/agent-approve", methods=["POST"])
 def agent_approve():
     """Approve an agent (set authStatus to approved)"""
+    guard = _require_asset_editor_auth()
+    if guard:
+        return guard
+        
     try:
         data = request.get_json()
         agent_id = (data.get("agentId") or "").strip()
@@ -914,6 +918,10 @@ def agent_approve():
 @app.route("/agent-reject", methods=["POST"])
 def agent_reject():
     """Reject an agent (set authStatus to rejected and optionally revoke key)"""
+    guard = _require_asset_editor_auth()
+    if guard:
+        return guard
+        
     try:
         data = request.get_json()
         agent_id = (data.get("agentId") or "").strip()
