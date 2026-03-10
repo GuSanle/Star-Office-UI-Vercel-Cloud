@@ -22,6 +22,7 @@ def kv_get(key: str):
                 return json.loads(val)
         except Exception as e:
             print(f"Redis get error for {key}: {e}")
+            raise  # Do not swallow Upstash connection errors; otherwise data gets wiped by fallback logic!
     return None
 
 def kv_set(key: str, data):
@@ -62,6 +63,7 @@ def kv_ttl(key: str) -> int:
             return redis_client.ttl(key)
         except Exception as e:
             print(f"Redis ttl error for {key}: {e}")
+            raise  # Do not swallow Upstash connection errors; otherwise it kicks users out incorrectly!
     return -2
 
 
