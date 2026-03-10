@@ -16,15 +16,21 @@ except ImportError:
 
 
 def _load_json(path: str):
-    """Load JSON from a file; caller handles missing file or parse errors."""
+    """Load JSON from a file; returns None if missing or parse error."""
     if redis_client:
         key = os.path.basename(path)
         data = kv_get(key)
         if data is not None:
             return data
 
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+    if not os.path.exists(path):
+        return None
+        
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
 
 
 def _save_json(path: str, data):
@@ -40,13 +46,9 @@ def _save_json(path: str, data):
 
 def load_agents_state(path: str, default_agents: list) -> list:
     """Load agents list from path; return default_agents if file missing or invalid."""
-    if os.path.exists(path):
-        try:
-            data = _load_json(path)
-            if isinstance(data, list):
-                return data
-        except Exception:
-            pass
+    data = _load_json(path)
+    if isinstance(data, list):
+        return data
     return list(default_agents)
 
 
@@ -57,13 +59,9 @@ def save_agents_state(path: str, agents: list):
 
 def load_asset_positions(path: str) -> dict:
     """Load asset positions map from path; return {} if missing or invalid."""
-    if os.path.exists(path):
-        try:
-            data = _load_json(path)
-            if isinstance(data, dict):
-                return data
-        except Exception:
-            pass
+    data = _load_json(path)
+    if isinstance(data, dict):
+        return data
     return {}
 
 
@@ -74,13 +72,9 @@ def save_asset_positions(path: str, data: dict):
 
 def load_asset_defaults(path: str) -> dict:
     """Load asset defaults map from path; return {} if missing or invalid."""
-    if os.path.exists(path):
-        try:
-            data = _load_json(path)
-            if isinstance(data, dict):
-                return data
-        except Exception:
-            pass
+    data = _load_json(path)
+    if isinstance(data, dict):
+        return data
     return {}
 
 
@@ -107,14 +101,10 @@ def load_runtime_config(path: str) -> dict:
         "gemini_api_key": os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "",
         "gemini_model": _normalize_user_model(os.getenv("GEMINI_MODEL") or "nanobanana-pro"),
     }
-    if os.path.exists(path):
-        try:
-            data = _load_json(path)
-            if isinstance(data, dict):
-                base.update({k: data.get(k, base.get(k)) for k in ["gemini_api_key", "gemini_model"]})
-                base["gemini_model"] = _normalize_user_model(base.get("gemini_model") or "nanobanana-pro")
-        except Exception:
-            pass
+    data = _load_json(path)
+    if isinstance(data, dict):
+        base.update({k: data.get(k, base.get(k)) for k in ["gemini_api_key", "gemini_model"]})
+        base["gemini_model"] = _normalize_user_model(base.get("gemini_model") or "nanobanana-pro")
     return base
 
 
@@ -131,13 +121,9 @@ def save_runtime_config(path: str, data: dict):
 
 def load_join_keys(path: str) -> dict:
     """Load join keys structure from path; return {'keys': []} if missing or invalid."""
-    if os.path.exists(path):
-        try:
-            data = _load_json(path)
-            if isinstance(data, dict) and isinstance(data.get("keys"), list):
-                return data
-        except Exception:
-            pass
+    data = _load_json(path)
+    if isinstance(data, dict) and isinstance(data.get("keys"), list):
+        return data
     return {"keys": []}
 
 
