@@ -1056,9 +1056,9 @@ def join_agent():
                 existing["area"] = state_to_area(state)
                 existing["source"] = "remote-openclaw"
                 existing["joinKey"] = join_key
-                existing["authStatus"] = "approved"
-                existing["authApprovedAt"] = datetime.now().isoformat()
-                existing["authExpiresAt"] = (datetime.now() + timedelta(hours=24)).isoformat()
+                existing["authStatus"] = "pending"
+                existing["authApprovedAt"] = None
+                existing["authExpiresAt"] = None
                 existing["lastPushAt"] = datetime.now().isoformat()  # join 视为上线，纳入并发/离线判定
                 if not existing.get("avatar"):
                     import random
@@ -1079,9 +1079,9 @@ def join_agent():
                     "area": state_to_area(state),
                     "source": "remote-openclaw",
                     "joinKey": join_key,
-                    "authStatus": "approved",
-                    "authApprovedAt": datetime.now().isoformat(),
-                    "authExpiresAt": (datetime.now() + timedelta(hours=24)).isoformat(),
+                    "authStatus": "pending",
+                    "authApprovedAt": None,
+                    "authExpiresAt": None,
                     "lastPushAt": datetime.now().isoformat(),
                     "avatar": random.choice(["guest_role_1", "guest_role_2", "guest_role_3", "guest_role_4", "guest_role_5", "guest_role_6"])
                 })
@@ -1092,12 +1092,11 @@ def join_agent():
             key_item["usedAt"] = datetime.now().isoformat()
             key_item["reusable"] = True
 
-            # 拿到有效 key 直接批准，不再等待主人手动点击
-            # （状态已在上面 existing/new 分支写入）
+            # 等待主人手动点击审批
             save_agents_state(agents)
             save_join_keys(keys_data)
 
-        return jsonify({"ok": True, "agentId": agent_id, "authStatus": "approved", "nextStep": "已自动批准，立即开始推送状态"})
+        return jsonify({"ok": True, "agentId": agent_id, "authStatus": "pending", "nextStep": "请等待管理员在大盘右侧抽屉内批准"})
     except Exception as e:
         return jsonify({"ok": False, "msg": str(e)}), 500
 
