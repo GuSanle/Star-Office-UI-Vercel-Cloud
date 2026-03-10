@@ -7,7 +7,6 @@ Notes:
 - Output: <name>-spritesheet.png
 """
 
-import os
 from PIL import Image
 
 

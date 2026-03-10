@@ -14,7 +14,7 @@ import tempfile
 import threading
 from pathlib import Path
 from security_utils import is_production_mode, is_strong_secret, is_strong_drawer_pass
-from memo_utils import get_yesterday_date_str, sanitize_content, extract_memo_from_file
+from memo_utils import get_yesterday_date_str, extract_memo_from_file
 from store_utils import (
     load_agents_state as _store_load_agents_state,
     save_agents_state as _store_save_agents_state,
@@ -27,6 +27,10 @@ from store_utils import (
     load_join_keys as _store_load_join_keys,
     save_join_keys as _store_save_join_keys,
 )
+try:
+    from redis_utils import redis_client, kv_get, kv_set
+except ImportError:
+    redis_client = None
 
 try:
     from PIL import Image
@@ -150,7 +154,7 @@ DEFAULT_STATE = {
 
 
 def load_state():
-    """Load state from file.
+    """Load state from file or Redis.
 
     Includes a simple auto-idle mechanism:
     - If the last update is older than ttl_seconds (default 25s)
@@ -159,7 +163,10 @@ def load_state():
     This avoids the UI getting stuck at the desk when no new updates arrive.
     """
     state = None
-    if os.path.exists(STATE_FILE):
+    if redis_client:
+        state = kv_get(os.path.basename(STATE_FILE))
+
+    if state is None and os.path.exists(STATE_FILE):
         try:
             with open(STATE_FILE, "r", encoding="utf-8") as f:
                 state = json.load(f)
@@ -200,7 +207,11 @@ def load_state():
 
 
 def save_state(state: dict):
-    """Save state to file"""
+    """Save state to file or Redis"""
+    if redis_client:
+        if kv_set(os.path.basename(STATE_FILE), state):
+            return
+            
     with open(STATE_FILE, "w", encoding="utf-8") as f:
         json.dump(state, f, ensure_ascii=False, indent=2)
 

@@ -22,14 +22,10 @@ Output (last line of stdout):
 """
 
 import argparse
-import base64
 import json
 import mimetypes
 import os
 import sys
-import tempfile
-import shutil
-from pathlib import Path
 
 try:
     from google import genai

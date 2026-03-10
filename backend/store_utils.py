@@ -9,15 +9,31 @@ from __future__ import annotations
 import json
 import os
 
+try:
+    from redis_utils import redis_client, kv_get, kv_set
+except ImportError:
+    redis_client = None
+
 
 def _load_json(path: str):
     """Load JSON from a file; caller handles missing file or parse errors."""
+    if redis_client:
+        key = os.path.basename(path)
+        data = kv_get(key)
+        if data is not None:
+            return data
+
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
 def _save_json(path: str, data):
     """Write data as JSON with UTF-8 and indent=2."""
+    if redis_client:
+        key = os.path.basename(path)
+        if kv_set(key, data):
+            return
+
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 

@@ -2,7 +2,6 @@
 """Convert GIF animation to sprite sheet for Phaser"""
 
 from PIL import Image
-import os
 
 def gif_to_spritesheet(gif_path, output_path, target_height=64):
     # Open the GIF
