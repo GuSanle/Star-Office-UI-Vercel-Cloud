@@ -90,7 +90,17 @@ python3 set_state.py idle "待命中"
 
 ## 🚀 详细部署指南
 
-### 1) 安装依赖
+### 方式一：Vercel 云端部署（推荐）
+
+本项目已原生支持 Vercel + Upstash Redis 无服务器部署。只需在 Vercel 中关联仓库，并在 Vercel Marketplace 中一键添加 Upstash Redis（环境变量自动注入），即可实现零成本的公网高可用看板。
+
+👉 **[点击查看完整的 Vercel 部署指南](./docs/VERCEL_DEPLOYMENT_TUTORIAL.md)**
+
+---
+
+### 方式二：本地传统部署
+
+#### 1) 安装依赖
 
 ```bash
 cd Star-Office-UI
