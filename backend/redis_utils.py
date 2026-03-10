@@ -33,3 +33,44 @@ def kv_set(key: str, data):
         except Exception as e:
             print(f"Redis set error for {key}: {e}")
     return False
+
+
+def kv_set_with_ttl(key: str, data, ttl_seconds: int):
+    """Serialize and save JSON to Redis with a fixed TTL (seconds).
+
+    The key will auto-expire after ttl_seconds regardless of subsequent reads.
+    """
+    if redis_client:
+        try:
+            redis_client.set(key, json.dumps(data, ensure_ascii=False), ex=ttl_seconds)
+            return True
+        except Exception as e:
+            print(f"Redis set_with_ttl error for {key}: {e}")
+    return False
+
+
+def kv_ttl(key: str) -> int:
+    """Return remaining TTL in seconds for a key.
+
+    Returns:
+      > 0 : seconds remaining
+      -1  : key exists but has no expiry
+      -2  : key does not exist (or expired)
+    """
+    if redis_client:
+        try:
+            return redis_client.ttl(key)
+        except Exception as e:
+            print(f"Redis ttl error for {key}: {e}")
+    return -2
+
+
+def kv_delete(key: str):
+    """Delete a key from Redis."""
+    if redis_client:
+        try:
+            redis_client.delete(key)
+            return True
+        except Exception as e:
+            print(f"Redis delete error for {key}: {e}")
+    return False

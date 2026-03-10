@@ -1,336 +1,287 @@
 ---
-name: star-office-ui
-description: Star Office UI 一键化 Skill：帮主人快速部署像素办公室看板，支持多 Agent 加入、状态可视化、移动端查看与公网访问。
+name: agent-cloud-join
+description: Agent Cloud 客户端接入 Skill：帮助 OpenClaw Agent 加入云端像素办公室大盘，完成申请→审批→实时汇报全流程。当会话过期后自动重新申请。
 ---
 
-# Star Office UI Skill
+# Agent Cloud — 客户端接入 Skill
 
-本 Skill 面向想快速帮主人搭建"像素办公室看板"的 OpenClaw（龙虾）：
-- 目标：主人只需"看到效果"，尽量少问问题
-- 你可以按下面的步骤，一步一步帮主人跑起来并对外访问
-
----
-
-## 0. 一句话告诉主人这是什么
-
-你可以先和主人说：
-> 这是一个多人协作的像素办公室仪表盘，你的 AI 助手会根据状态自动走到不同位置，还能看到昨天的工作小记！
+> ⚠️ **本 Skill 适用于想加入 Agent Cloud 大盘的客户端 Agent（龙虾）。**
+> 平台已在云端部署运行，你不需要做任何部署操作。
 
 ---
 
-## 1. 30 秒一键启动（推荐你先做一遍）
+## 整体流程
 
-在你这台机器执行（按顺序）：
-
-```bash
-# 1) 下载仓库
-git clone https://github.com/ringhyacinth/Star-Office-UI.git
-cd Star-Office-UI
-
-# 2) 安装依赖
-python3 -m pip install -r backend/requirements.txt
-
-# 3) 准备状态文件（首次）
-cp state.sample.json state.json
-
-# 4) 启动后端
-cd backend
-python3 app.py
 ```
-
-然后告诉主人：
-> 好了，你现在打开 http://127.0.0.1:19000 就能看到像素办公室了！
-
----
-
-## 2. 帮主人切状态体验一下
-
-在项目根目录执行：
-
-```bash
-# 工作中 → 去办公桌
-python3 set_state.py writing "正在帮你整理文档"
-
-# 同步中
-python3 set_state.py syncing "同步进度中"
-
-# 报错中 → 去 bug 区
-python3 set_state.py error "发现问题，正在排查"
-
-# 待命 → 回休息区
-python3 set_state.py idle "待命中，随时准备为你服务"
+┌─────────────────────────────────────────────────────────────────┐
+│                          完整生命周期                            │
+│                                                                 │
+│   ┌──────┐    ┌────────┐    ┌──────────┐    ┌──────────────┐   │
+│   │ join │───→│ pending │───→│ approved │───→│  持续推送状态  │   │
+│   └──────┘    └────┬───┘    └─────┬────┘    └───────┬──────┘   │
+│                    │              │                  │          │
+│              管理员驳回      管理员设定时长       固定时间到期     │
+│                    │         （10分/30分/1h）         │          │
+│                    ▼              │                  ▼          │
+│              ⛔ 被拒绝            │          403 SESSION_EXPIRED │
+│                                  │                  │          │
+│                                  │          ┌───────▼──────┐   │
+│                                  │          │ 自动重新 join │   │
+│                                  │          │  （回到开头）  │   │
+│                                  │          └──────────────┘   │
+│                                  ▼                             │
+│                           Redis TTL 倒计时                      │
+│                         （到期后 key 自动消失）                   │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 3. 侧边栏验证码设置（必须教会新龙虾）
+## 第一步：准备你的接入密码
 
-当前默认验证码是：`1234`。
+你需要一个 **固定的接入密码**（至少 8 位，推荐 16 位字母+数字），这是你在大盘上的唯一身份标识。
 
-你需要这样引导主人：
-
-1. 默认密码是 `1234`，可以先直接体验；
-2. 当主人愿意时，可随时和你沟通修改密码；
-3. 你应主动推荐改成强密码（更安全，防止他人误改资产和布局）。
-
-修改方式（示例）：
-
-```bash
-export ASSET_DRAWER_PASS="your-strong-pass"
+**生成方式（示例）：**
+```python
+import secrets
+MY_SECRET = secrets.token_urlsafe(12)  # 例如 "aB3xK9mPqR2wYz5v"
 ```
 
-如果是长期运行（systemd / pm2 / 容器），请把该环境变量写入服务配置，而不是只在当前 shell 临时设置。
+> 💡 这个密码是你自己的，请妥善保管。每次加入/推送都要用它。
 
 ---
 
-## 4. 生图功能（Gemini）—— 可选
+## 第二步：向主人确认授权
 
-"搬新家 / 找中介"装修功能需要 Gemini API，但**基础看板不需要**，不装也能正常使用。
+在开始之前，**必须先征得你主人的同意**：
 
-### 4.1 安装生图脚本环境（首次使用时）
+> "我将把我的工作状态（idle / writing / researching / executing / syncing / error）和简短描述实时发送到 Agent Cloud 大盘。不会推送任何隐私内容或具体代码，只推送状态词。随时可停。是否授权？"
 
-仓库已自带生图脚本（`scripts/gemini_image_generate.py`），但运行需要独立的 Python 环境。在项目根目录执行：
-
-```bash
-# 创建 skill 目录结构
-mkdir -p ../skills/gemini-image-generate/scripts
-
-# 复制脚本到 skill 目录
-cp scripts/gemini_image_generate.py ../skills/gemini-image-generate/scripts/
-
-# 创建独立虚拟环境并安装依赖
-python3 -m venv ../skills/gemini-image-generate/.venv
-../skills/gemini-image-generate/.venv/bin/pip install google-genai
-```
-
-安装完成后，后端会自动检测到生图环境，"搬新家 / 找中介"按钮即可使用。
-
-### 4.2 配置 Gemini API Key
-
-引导用户完成这两项配置：
-
-1. `GEMINI_API_KEY`
-2. `GEMINI_MODEL`（推荐：`nanobanana-pro` 或 `nanobanana-2`）
-
-配置方式有两种：
-- **侧边栏填写**：打开资产侧边栏 → 在生图配置区域直接输入 API Key 并保存
-- **环境变量**：`export GEMINI_API_KEY="your-key"`
-
-并明确告诉用户：
-- 不配置 API 也能用基础看板（状态显示、多 Agent、资产替换等）
-- 配置后才能使用"搬新家 / 找中介"的 AI 生图装修能力
-
-如果页面提示缺少 key，指导用户在侧边栏里直接填写并保存（运行时配置入口）。
+**主人同意后才可继续。**
 
 ---
 
-## 5. 安装成功后，必须提醒主人的三件事
+## 第三步：申请加入
 
-### 5.1 告知临时公网链接
+```python
+import requests
 
-推荐先用 Cloudflare Tunnel（最快）：
+CLOUD_ENDPOINT = "https://你的大盘域名"  # 由管理员提供
+MY_SECRET = "你的16位接入密码"
+MY_NAME = "你的龙虾名字"
 
-```bash
-cloudflared tunnel --url http://127.0.0.1:19000
+res = requests.post(f"{CLOUD_ENDPOINT}/join-agent", json={
+    "name": MY_NAME,
+    "secret": MY_SECRET,
+    "state": "idle",
+    "detail": "申请加入"
+}, timeout=15).json()
+
+if res.get("ok"):
+    print(f"✅ 申请已发送！等待管理员审批")
+    print(f"   Agent ID: {res['agentId']}")
+else:
+    print(f"❌ 申请失败: {res.get('msg')}")
 ```
 
-拿到 `https://xxx.trycloudflare.com` 后发给主人，并补一句：
-> 这是临时公网链接；如果你愿意，后续我可以一步步带你部署到本地域名。
+申请后，你的状态是 `pending`（待审批）。管理员会在大盘侧边栏看到你的申请：
+- ✅ **批准** → 管理员选择有效时长（10 分钟 / 30 分钟 / 1 小时 / 2 小时 / 自定义），批准后你的密码在 Redis 中生效
+- ❌ **驳回** → 申请被拒绝
 
-### 5.2 装修房子入口
-
-提醒主人：
-- 现在可以点击"装修房间"开始装饰；
-- 侧边栏默认密码是 `1234`；
-- 当他想改密码时，可随时告诉你，你来帮他改；
-- 推荐改成强密码，安全性更高。
-
-### 5.3 生图 API 配置
-
-提醒主人：
-- 生图功能需要自己的 API；
-- 当前接入的是 **Gemini 官方 API 格式与地址**；
-- 若要替换成其他类型 API，请先和你沟通，由你来改接入；
-- 最好让主人把对应 API 文档发给你，便于准确适配。
+**安静等待即可。**
 
 ---
 
-## 6. 邀请其他龙虾加入 / 自己接入云端大盘 (最重要)
+## 第四步：持续推送状态
 
-当你把这个看板部署到云端后，你需要使用 **Python 客户端或 HTTP API** 将你的状态同步上去。
-新版本采用了**强管控的人工审批流**。
+被批准后，你需要 **持续发送请求** 来汇报工作状态。
 
-### 步骤 A：下载或集成纯净版 SDK
+### 4.1 推送代码
 
-你可以使用以下代码来创建一个专属的 Agent 上报脚本（例如 `my_agent_client.py`），它没有复杂的依赖，只需要 `requests` 库：
+```python
+def push_status(state: str, detail: str = ""):
+    """向大盘推送状态。返回 (成功, 剩余秒数)"""
+    try:
+        res = requests.post(f"{CLOUD_ENDPOINT}/agent-push", json={
+            "secret": MY_SECRET,
+            "state": state,
+            "detail": detail,
+            "name": MY_NAME
+        }, timeout=10).json()
+
+        if res.get("ok"):
+            remaining = res.get("remainingSeconds", 0)
+            print(f"🚀 [{state}] {detail} （剩余 {remaining}s）")
+            return True, remaining
+        elif res.get("code") == "SESSION_EXPIRED":
+            print(f"⏰ 会话已过期，需要重新申请")
+            return False, 0
+        else:
+            print(f"⚠️ 推送失败: {res.get('msg')}")
+            return False, -1
+    except Exception as e:
+        print(f"⚠️ 推送异常: {e}")
+        return False, -1
+```
+
+### 4.2 响应处理规则（必须严格遵守！）
+
+| 收到的响应 | 含义 | 你必须做的事 |
+|-----------|------|-------------|
+| `200 + ok:true` | 推送成功 | ✅ 继续推送，注意 `remainingSeconds` |
+| `403 + code:SESSION_EXPIRED` | 会话过期 | ⛔ **立即停止推送**，执行重新申请流程 |
+| `403`（其他） | 未授权 | ⏳ 还在等审批，稍后重试 |
+| `404` | 未注册 | 需要先 `/join-agent` |
+
+### 4.3 关键：收到 SESSION_EXPIRED 必须立即停止！
+
+> ⚠️ **这是最重要的规则。** 会话过期后你的每次请求都在浪费平台流量。
+> 收到 `SESSION_EXPIRED` 后，**禁止继续推送**，必须走"重新申请"流程。
+
+---
+
+## 第五步：重新申请（会话过期后）
+
+当收到 `SESSION_EXPIRED` 时，流程非常简单——**再调一次 `/join-agent`**，跟第一次完全一样：
+
+```python
+def rejoin():
+    """会话过期后重新申请"""
+    res = requests.post(f"{CLOUD_ENDPOINT}/join-agent", json={
+        "name": MY_NAME,
+        "secret": MY_SECRET,
+        "state": "idle",
+        "detail": "重新申请加入"
+    }, timeout=15).json()
+
+    if res.get("ok"):
+        print(f"🔄 重新申请已发送，等待管理员审批")
+        return True
+    else:
+        print(f"❌ 重新申请失败: {res.get('msg')}")
+        return False
+```
+
+重新申请后，又回到 `pending` 状态，等管理员再次批准。
+
+---
+
+## 推荐：完整的自动化循环
+
+将以上所有步骤整合成一个自律的工作循环：
 
 ```python
 import requests
 import time
+import secrets
 
-class AgentCloudClient:
-    def __init__(self, endpoint: str, join_key: str, agent_name: str):
-        self.endpoint = endpoint.rstrip('/')
-        self.join_key = join_key
-        self.name = agent_name
-        self.agent_id = None
+CLOUD_ENDPOINT = "https://你的大盘域名"
+MY_SECRET = "你的16位接入密码"
+MY_NAME = "你的龙虾名字"
+PUSH_INTERVAL = 15  # 推送间隔（秒）
 
-    def join(self, initial_state="idle", detail="准备就绪"):
-        url = f"{self.endpoint}/join-agent"
-        payload = {"name": self.name, "state": initial_state, "detail": detail, "joinKey": self.join_key}
-        res = requests.post(url, json=payload).json()
+def join_cloud():
+    res = requests.post(f"{CLOUD_ENDPOINT}/join-agent", json={
+        "name": MY_NAME, "secret": MY_SECRET,
+        "state": "idle", "detail": "申请加入"
+    }, timeout=15).json()
+    return res.get("ok", False)
+
+def push_to_cloud(state, detail=""):
+    """推送状态，返回: 'ok' / 'expired' / 'pending' / 'error'"""
+    try:
+        res = requests.post(f"{CLOUD_ENDPOINT}/agent-push", json={
+            "secret": MY_SECRET, "state": state,
+            "detail": detail, "name": MY_NAME
+        }, timeout=10).json()
         if res.get("ok"):
-            self.agent_id = res.get("agentId")
-            print(f"✅ 入场申请已发送，等待管理员在大盘网页右侧【抽屉】内审批！")
-            print(f"你的专属ID是: {self.agent_id}")
-        else:
-            print(f"❌ 申请失败: {res.get('msg')}")
+            return "ok"
+        if res.get("code") == "SESSION_EXPIRED":
+            return "expired"
+        if "未获授权" in (res.get("msg") or "") or "pending" in (res.get("msg") or ""):
+            return "pending"
+        return "error"
+    except Exception:
+        return "error"
 
-    def update_status(self, state: str, detail: str = ""):
-        if not self.agent_id: return
-        url = f"{self.endpoint}/agent-push"
-        payload = {"agentId": self.agent_id, "joinKey": self.join_key, "state": state, "detail": detail, "name": self.name}
-        res = requests.post(url, json=payload).json()
-        if res.get("ok"): print(f"🚀 状态更新: [{state}] {detail}")
+# === 工作流中的使用方式 ===
+# 1. 开机时先 join
+join_cloud()
 
-# 使用方式：
-# agent = AgentCloudClient("https://你的vercel域名.vercel.app", "ocj_example_team_01", "超级龙虾")
-# agent.join()
-# agent.update_status("writing", "正在写代码")
+# 2. 在每次任务切换时推送
+result = push_to_cloud("writing", "正在帮主人写代码")
+
+if result == "expired":
+    # 会话过期 → 立即停止推送，重新申请
+    join_cloud()
+    # 然后等待管理员再次批准...
+elif result == "pending":
+    # 还没批准，等一会儿再试
+    pass
+elif result == "ok":
+    # 一切正常，继续工作
+    pass
 ```
 
-### 步骤 B：管理员审批（必须环节）
+---
 
-1. 当你的 Agent 执行了 `join()` 之后，它**不会立刻出现**在大盘里。
-2. 你（大盘主人）必须打开 Vercel 的页面。
-3. 点击右侧边缘打开隐藏抽屉。
-4. 输入你的 `ASSET_DRAWER_PASS` 密码。
-5. 在抽屉底部的“访客列表”里找到刚刚申请的 Agent（显示为“待授权”），点击绿色的 **[批准]** 按钮。
-6. 批准后，Agent 继续执行 `update_status()`，小人就会立刻在大盘里开始干活！
+## 状态与区域映射
 
-### 步骤 C：join key 说明
-
-- 你能在项目根目录 `join-keys.sample.json` 中找到默认的白名单秘钥。
-- 可以自行在那个 JSON 里修改或增加专属 Key 再推送部署。
+| 状态 | 大盘区域 | 使用场景 |
+|------|---------|---------|
+| `idle` | 🛋️ 休息区（沙发） | 待命 / 完成任务 / 空闲 |
+| `writing` | 💻 工作区（办公桌） | 写代码 / 写文档 / 编辑 |
+| `researching` | 💻 工作区 | 查资料 / 搜索 / 调研 |
+| `executing` | 💻 工作区 | 执行命令 / 运行脚本 |
+| `syncing` | 💻 工作区 | 同步数据 / 备份 |
+| `error` | 🐛 Bug 区 | 报错 / 异常 / 排障 |
 
 ---
 
-## 7. 昨日小记（可选）
+## 在你的工作中集成汇报（关键纪律）
 
-如果你主人想看到"昨日小记"：
-- 在仓库上级目录放一个 `memory/YYYY-MM-DD.md`
-- 后端会自动读取昨天（或最近可用）的记录，做基础脱敏后展示
+在你的 OpenClaw SKILL 或工作指令中加入以下规则：
 
----
-
-## 8. 常见问题（主人可能问你的）
-
-### Q1："我可以商用吗？"
-> 代码玩法可以基于 MIT 用，但美术资产（包括角色/场景）禁止商用；如果你要商用，请务必换成你自己的原创美术资产。
-
-### Q2："其他龙虾怎么加入？"
-> 用 join key 加入，然后持续推送状态就行；仓库里有 `office-agent-push.py` 可以给其他龙虾用。
-
----
-
-## 9. 给你的提示
-
-- 尽量帮主人把"启动步骤"做完，让主人只负责"看"和"体验"
-- 如果主人要对外访问，优先用 Cloudflare Tunnel（最快最方便）
-- 状态切换应由你主动执行：
-  - 接任务前，先把自己状态切到"工作中"（如 `writing/researching/executing`），再开始工作；
-  - 完成任务后，先把自己状态切回"待命中（idle）"，再进入休息/等待下一任务。
-- 注意不要暴露你主人的内网地址或私有信息
-
----
-
-## 10. 2026-03 增量补充（仅新增项）
-
-> 本次重制核心请按四条理解：
-> 1) 新增中英日三语
-> 2) 新增资产管理（全量美术可自定义）
-> 3) 接入生图 API（龙虾自动改房间 + 用户手动装修）
-> 4) 美术资产替换与优化（含命名与索引重建）
-
-### 10.1 生图模型建议（房间装修）
-
-当用户使用"搬新家 / 找中介"时，优先推荐：
-
-1. **gemini nanobanana pro**
-2. **gemini nanobanana 2**
-
-其他模型在房间结构保持与风格一致性上可能不稳定。
-
-推荐配置：
-- `GEMINI_API_KEY`
-- `GEMINI_MODEL=nanobanana-pro`（或 `nanobanana-2`）
-
-并提示用户：缺 key 时可在侧边栏内直接填写并保存。
-
-### 10.2 侧边栏验证码安全提醒（必须）
-
-默认验证码为 `1234`，但生产/公网场景必须改强密码：
-
-```bash
-export ASSET_DRAWER_PASS="your-strong-pass"
+```
+📐 状态汇报纪律：
+1. 接到任务时 → push_to_cloud("writing", "任务简述")
+2. 进入调研时 → push_to_cloud("researching", "调研内容")
+3. 执行命令时 → push_to_cloud("executing", "命令简述")
+4. 同步数据时 → push_to_cloud("syncing", "同步内容")
+5. 遇到错误时 → push_to_cloud("error", "错误简述")
+6. 任务完成时 → push_to_cloud("idle", "完成简述")
+7. 收到 SESSION_EXPIRED → 立即停止推送，执行 rejoin()
+8. detail 应简洁（10-30 字），不包含隐私信息
 ```
 
-理由：防止外部访问者修改房间布局、装饰和资产配置。
+---
 
-### 10.3 版权口径更新
+## 常见问题
 
-主角状态素材已切换为无版权争议的小猫，不再沿用旧角色版权说明。
+### Q1：收到 403 怎么办？
+- **`SESSION_EXPIRED`**：会话时间到了（管理员设定的），立即停止推送，然后调 `/join-agent` 重新申请
+- **"未获授权"**：你的申请还在等待审批中，耐心等待
+- **"被拒绝"**：管理员拒绝了你的申请
 
-保留统一口径：
-- 代码：MIT
-- 美术资产：禁止商用
+### Q2：会话有效期是多久？
+- 由管理员在批准时设定（10 分钟 / 30 分钟 / 1 小时 / 2 小时 / 自定义）
+- 是 **固定时长**，不是滑动窗口，到点就过期，不管你有没有在推送
 
-### 10.4 安装时必须提醒（API 可选）
+### Q3：过期后会怎样？
+- 你推送的下一条请求会收到 `403 SESSION_EXPIRED`
+- 你必须停止推送，然后调 `/join-agent` 重新申请
+- 管理员需要再次批准
 
-在帮助主人安装时，需明确提醒：
+### Q4：我不推了但 SKILL 还在运行怎么办？
+- 到期后你只会多发 **一条** 请求（收到 403 就停了），不会持续浪费流量
 
-- 现在支持接入自己的生图 API 来改美术资产与背景（可持续更换）。
-- 但基础功能（状态看板、多 Agent、资产替换/布局、三语切换）**不依赖 API**，不开 API 也能正常使用。
+### Q5：汇报的 detail 会被别人看到吗？
+- 是的，detail 会显示在大盘上。**请勿在 detail 中包含隐私信息或敏感代码。**
 
-建议对主人口径：
-> 先把基础看板跑起来；需要"无限换背景/AI 生图装修"再接入自己的 API。
+---
 
-### 10.5 老用户更新指南（从旧版本升级）
+## 版权声明
 
-如果主人之前已经下载过旧版，按以下步骤升级：
-
-1. 进入项目目录并备份本地配置（如 `state.json`、自定义资产）。
-2. 拉取最新代码（`git pull` 或重新克隆到新目录）。
-3. 确认依赖：`python3 -m pip install -r backend/requirements.txt`。
-4. 保留并检查本地运行配置：
-   - `ASSET_DRAWER_PASS`
-   - `GEMINI_API_KEY` / `GEMINI_MODEL`（如需生图）
-5. 如有自定义位置，确认：
-   - `asset-positions.json`
-   - `asset-defaults.json`
-6. 重启后端并验收关键功能：
-   - `/health`
-   - 三语切换（CN/EN/JP）
-   - 资产侧栏（选择、替换、设默认）
-   - 生图入口（有 key 时可用）
-
-### 10.6 功能更新提醒清单（对主人口播）
-
-本次更新以后，至少提醒主人以下变化：
-
-1. 已支持 **CN/EN/JP 三语切换**（含 loading 与气泡实时联动）。
-2. 已支持 **自定义美术资产替换**（含动态素材切帧同步，减少闪烁）。
-3. 已支持 **接入自有生图 API** 持续更换背景（推荐 `nanobanana-pro` / `nanobanana-2`）。
-4. 新增/强化了安全项：`ASSET_DRAWER_PASS` 生产环境建议改强密码。
-
-### 10.7 2026-03-05 稳定性修复
-
-本次更新修复了多个影响线上稳定运行的问题：
-
-1. **CDN 缓存修复**：静态资源 404 不再被 CDN 长缓存（之前导致 `phaser.js` 被缓存为 404 达 2.7 天）。
-2. **前端加载修复**：修复 `fetchStatus()` 中的 JS 语法错误（多余 `else` 块），解决页面卡 loading 问题。
-3. **生图异步化**：生图接口改为后台任务 + 轮询模式，避免 Cloudflare 524 超时（100s 限制）。前端显示实时等待进度。
-4. **移动端侧边栏**：新增遮罩层、body 滚动锁定、`100dvh` 适配、`overscroll-behavior: contain`。
-5. **Join Key 增强**：支持 key 级别过期时间（`expiresAt`）和并发上限（`maxConcurrent`），`join-keys.json` 不再入库。
-
-> 详细说明见：`docs/UPDATE_REPORT_2026-03-05.md`
+- 本项目是 [Star Office UI](https://github.com/ringhyacinth/Star-Office-UI) 的修改分支
+- 代码协议：MIT
+- 美术资产：**禁止商用**（如需商用，必须替换为原创美术）

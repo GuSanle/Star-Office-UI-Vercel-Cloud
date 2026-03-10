@@ -34,9 +34,12 @@ from store_utils import (
     save_join_keys as _store_save_join_keys,
 )
 try:
-    from redis_utils import redis_client, kv_get, kv_set
+    from redis_utils import redis_client, kv_get, kv_set, kv_set_with_ttl, kv_ttl, kv_delete
 except ImportError:
     redis_client = None
+    kv_set_with_ttl = None
+    kv_ttl = None
+    kv_delete = None
 
 try:
     from PIL import Image
@@ -889,7 +892,13 @@ def get_agents():
 
 @app.route("/agent-approve", methods=["POST"])
 def agent_approve():
-    """Approve an agent (set authStatus to approved)"""
+    """Approve an agent: activate its secret in Redis with a fixed TTL.
+
+    Body: { agentId, durationMinutes? }
+    - durationMinutes defaults to 10 if not provided.
+    - The agent's secret is stored as a Redis key with a fixed TTL.
+    - After TTL expires, the key vanishes and agent-push returns 403.
+    """
     guard = _require_asset_editor_auth()
     if guard:
         return guard
@@ -897,20 +906,53 @@ def agent_approve():
     try:
         data = request.get_json()
         agent_id = (data.get("agentId") or "").strip()
+        duration_minutes = int(data.get("durationMinutes") or 10)
         if not agent_id:
             return jsonify({"ok": False, "msg": "缺少 agentId"}), 400
+        if duration_minutes < 1:
+            duration_minutes = 1
+        if duration_minutes > 1440:  # max 24h
+            duration_minutes = 1440
 
         agents = load_agents_state()
         target = next((a for a in agents if a.get("agentId") == agent_id and not a.get("isMain")), None)
         if not target:
             return jsonify({"ok": False, "msg": "未找到 agent"}), 404
 
+        secret = target.get("secret", "")
+        if not secret:
+            return jsonify({"ok": False, "msg": "该 agent 没有 secret"}), 400
+
+        ttl_seconds = duration_minutes * 60
+
+        # Activate in Redis: key = "session:{secret}", value = agent info, TTL = fixed
+        session_key = f"session:{secret}"
+        session_data = {
+            "agentId": agent_id,
+            "name": target.get("name", ""),
+            "secret": secret,
+            "approvedAt": datetime.now().isoformat(),
+            "durationMinutes": duration_minutes,
+        }
+        if kv_set_with_ttl:
+            kv_set_with_ttl(session_key, session_data, ttl_seconds)
+        else:
+            # Fallback: no Redis available, store in memory with timestamp
+            target["_sessionExpiresAt"] = (datetime.now() + timedelta(seconds=ttl_seconds)).isoformat()
+
         target["authStatus"] = "approved"
         target["authApprovedAt"] = datetime.now().isoformat()
-        target["authExpiresAt"] = (datetime.now() + timedelta(hours=24)).isoformat()  # 默认授权24h
+        target["authExpiresAt"] = (datetime.now() + timedelta(seconds=ttl_seconds)).isoformat()
+        target["durationMinutes"] = duration_minutes
 
         save_agents_state(agents)
-        return jsonify({"ok": True, "agentId": agent_id, "authStatus": "approved"})
+        return jsonify({
+            "ok": True,
+            "agentId": agent_id,
+            "authStatus": "approved",
+            "durationMinutes": duration_minutes,
+            "expiresAt": target["authExpiresAt"],
+        })
     except Exception as e:
         return jsonify({"ok": False, "msg": str(e)}), 500
 
@@ -959,126 +1001,64 @@ def agent_reject():
 
 @app.route("/join-agent", methods=["POST"])
 def join_agent():
-    """Add a new agent with one-time join key validation and pending auth"""
+    """Register a new agent with a client-provided secret, pending admin approval.
+
+    Body: { name, secret, state?, detail? }
+    - secret: 16-char password the client brings (their identity key)
+    - After join, status is 'pending' until admin approves
+    - Re-joining with the same secret resets to pending
+    """
     try:
         data = request.get_json()
         if not isinstance(data, dict) or not data.get("name"):
             return jsonify({"ok": False, "msg": "请提供名字"}), 400
 
         name = data["name"].strip()
+        secret = (data.get("secret") or "").strip()
         state = data.get("state", "idle")
         detail = data.get("detail", "")
-        join_key = data.get("joinKey", "").strip()
 
         # Normalize state early for compatibility
         state = normalize_agent_state(state)
 
-        if not join_key:
-            return jsonify({"ok": False, "msg": "请提供接入密钥"}), 400
-
-        keys_data = load_join_keys()
-        key_item = next((k for k in keys_data.get("keys", []) if k.get("key") == join_key), None)
-        if not key_item:
-            return jsonify({"ok": False, "msg": "接入密钥无效"}), 403
-        # key 可复用：不再因为 used=true 拒绝
+        if not secret or len(secret) < 8:
+            return jsonify({"ok": False, "msg": "请提供至少8位的接入密码（secret）"}), 400
 
         with join_lock:
-            # 在锁内重新读取，避免并发请求都基于同一旧快照通过校验
-            keys_data = load_join_keys()
-            key_item = next((k for k in keys_data.get("keys", []) if k.get("key") == join_key), None)
-            if not key_item:
-                return jsonify({"ok": False, "msg": "接入密钥无效"}), 403
-
-            # Key-level expiration check
-            key_expires_at_str = key_item.get("expiresAt")
-            if key_expires_at_str:
-                try:
-                    key_expires_at = datetime.fromisoformat(key_expires_at_str)
-                    if datetime.now() > key_expires_at:
-                        return jsonify({"ok": False, "msg": "该接入密钥已过期，活动已结束 🎉"}), 403
-                except Exception:
-                    pass
-
             agents = load_agents_state()
 
-            # 并发上限：同一个 key “同时在线”最多 3 个。
-            # 在线判定：lastPushAt/updated_at 在 5 分钟内；否则视为 offline，不计入并发。
-            now = datetime.now()
-            existing = next((a for a in agents if a.get("name") == name and not a.get("isMain")), None)
-            existing_id = existing.get("agentId") if existing else None
-
-            def _age_seconds(dt_str):
-                if not dt_str:
-                    return None
-                try:
-                    dt = datetime.fromisoformat(dt_str)
-                    return (now - dt).total_seconds()
-                except Exception:
-                    return None
-
-            # opportunistic offline marking
-            for a in agents:
-                if a.get("isMain"):
-                    continue
-                if a.get("authStatus") != "approved":
-                    continue
-                age = _age_seconds(a.get("lastPushAt"))
-                if age is None:
-                    age = _age_seconds(a.get("updated_at"))
-                if age is not None and age > 300:
-                    a["authStatus"] = "offline"
-
-            max_concurrent = int(key_item.get("maxConcurrent", 3))
-            active_count = 0
-            for a in agents:
-                if a.get("isMain"):
-                    continue
-                if a.get("agentId") == existing_id:
-                    continue
-                if a.get("joinKey") != join_key:
-                    continue
-                if a.get("authStatus") != "approved":
-                    continue
-                age = _age_seconds(a.get("lastPushAt"))
-                if age is None:
-                    age = _age_seconds(a.get("updated_at"))
-                if age is None or age <= 300:
-                    active_count += 1
-
-            if active_count >= max_concurrent:
-                save_agents_state(agents)
-                return jsonify({"ok": False, "msg": f"该接入密钥当前并发已达上限（{max_concurrent}），请稍后或换另一个 key"}), 429
+            # Check if this secret already has an agent
+            existing = next((a for a in agents if a.get("secret") == secret and not a.get("isMain")), None)
 
             if existing:
+                # Re-joining: reset to pending
+                existing["name"] = name
                 existing["state"] = state
                 existing["detail"] = detail
                 existing["updated_at"] = datetime.now().isoformat()
                 existing["area"] = state_to_area(state)
                 existing["source"] = "remote-openclaw"
-                existing["joinKey"] = join_key
                 existing["authStatus"] = "pending"
                 existing["authApprovedAt"] = None
                 existing["authExpiresAt"] = None
-                existing["lastPushAt"] = datetime.now().isoformat()  # join 视为上线，纳入并发/离线判定
+                existing["lastPushAt"] = datetime.now().isoformat()
                 if not existing.get("avatar"):
-                    import random
                     existing["avatar"] = random.choice(["guest_role_1", "guest_role_2", "guest_role_3", "guest_role_4", "guest_role_5", "guest_role_6"])
                 agent_id = existing.get("agentId")
             else:
-                # Use ms + random suffix to avoid collisions under concurrent joins
-                import random
+                # New agent
                 import string
                 agent_id = "agent_" + str(int(datetime.now().timestamp() * 1000)) + "_" + "".join(random.choices(string.ascii_lowercase + string.digits, k=4))
                 agents.append({
                     "agentId": agent_id,
                     "name": name,
                     "isMain": False,
+                    "secret": secret,
                     "state": state,
                     "detail": detail,
                     "updated_at": datetime.now().isoformat(),
                     "area": state_to_area(state),
                     "source": "remote-openclaw",
-                    "joinKey": join_key,
                     "authStatus": "pending",
                     "authApprovedAt": None,
                     "authExpiresAt": None,
@@ -1086,17 +1066,9 @@ def join_agent():
                     "avatar": random.choice(["guest_role_1", "guest_role_2", "guest_role_3", "guest_role_4", "guest_role_5", "guest_role_6"])
                 })
 
-            key_item["used"] = True
-            key_item["usedBy"] = name
-            key_item["usedByAgentId"] = agent_id
-            key_item["usedAt"] = datetime.now().isoformat()
-            key_item["reusable"] = True
-
-            # 等待主人手动点击审批
             save_agents_state(agents)
-            save_join_keys(keys_data)
 
-        return jsonify({"ok": True, "agentId": agent_id, "authStatus": "pending", "nextStep": "请等待管理员在大盘右侧抽屉内批准"})
+        return jsonify({"ok": True, "agentId": agent_id, "authStatus": "pending", "nextStep": "请等待管理员审批"})
     except Exception as e:
         return jsonify({"ok": False, "msg": str(e)}), 500
 
@@ -1158,66 +1130,58 @@ def get_status():
 
 @app.route("/agent-push", methods=["POST"])
 def agent_push():
-    """Remote openclaw actively pushes status to office.
+    """Remote agent pushes status update.
 
-    Required fields:
-    - agentId
-    - joinKey
-    - state
-    Optional:
-    - detail
-    - name
+    Validates the agent's secret against Redis session key.
+    - If session:{secret} exists → accept, return remainingSeconds
+    - If session:{secret} expired/missing → 403 SESSION_EXPIRED (client must stop)
+
+    Body: { secret, state, detail?, name? }
     """
     try:
         data = request.get_json()
         if not isinstance(data, dict):
             return jsonify({"ok": False, "msg": "invalid json"}), 400
 
-        agent_id = (data.get("agentId") or "").strip()
-        join_key = (data.get("joinKey") or "").strip()
+        secret = (data.get("secret") or "").strip()
         state = (data.get("state") or "").strip()
         detail = (data.get("detail") or "").strip()
         name = (data.get("name") or "").strip()
 
-        if not agent_id or not join_key or not state:
-            return jsonify({"ok": False, "msg": "缺少 agentId/joinKey/state"}), 400
+        if not secret or not state:
+            return jsonify({"ok": False, "msg": "缺少 secret/state"}), 400
 
         state = normalize_agent_state(state)
 
-        keys_data = load_join_keys()
-        key_item = next((k for k in keys_data.get("keys", []) if k.get("key") == join_key), None)
-        if not key_item:
-            return jsonify({"ok": False, "msg": "joinKey 无效"}), 403
+        # Check Redis session
+        session_key = f"session:{secret}"
+        remaining_seconds = -2
 
-        # Key-level expiration check
-        key_expires_at_str = key_item.get("expiresAt")
-        if key_expires_at_str:
-            try:
-                key_expires_at = datetime.fromisoformat(key_expires_at_str)
-                if datetime.now() > key_expires_at:
-                    return jsonify({"ok": False, "msg": "该接入密钥已过期，活动已结束 🎉"}), 403
-            except Exception:
-                pass
+        if kv_ttl:
+            remaining_seconds = kv_ttl(session_key)
 
+        if remaining_seconds <= 0:
+            # Session expired or never existed → tell client to stop
+            # Also clean up from agents-state
+            agents = load_agents_state()
+            target = next((a for a in agents if a.get("secret") == secret and not a.get("isMain")), None)
+            if target:
+                target["authStatus"] = "expired"
+                target["state"] = "idle"
+                target["detail"] = "会话已过期"
+                target["area"] = "breakroom"
+                save_agents_state(agents)
+            return jsonify({
+                "ok": False,
+                "code": "SESSION_EXPIRED",
+                "msg": "会话已过期，请重新申请加入（/join-agent）"
+            }), 403
 
+        # Session active → update agent state
         agents = load_agents_state()
-        target = next((a for a in agents if a.get("agentId") == agent_id and not a.get("isMain")), None)
+        target = next((a for a in agents if a.get("secret") == secret and not a.get("isMain")), None)
         if not target:
             return jsonify({"ok": False, "msg": "agent 未注册，请先 join"}), 404
-
-        # Auth check: only approved agents can push.
-        # Note: "offline" is a presence state (stale), not a revoked authorization.
-        # Allow offline agents to resume pushing and auto-promote them back to approved.
-        auth_status = target.get("authStatus", "pending")
-        if auth_status not in {"approved", "offline"}:
-            return jsonify({"ok": False, "msg": "agent 未获授权，请等待主人批准"}), 403
-        if auth_status == "offline":
-            target["authStatus"] = "approved"
-            target["authApprovedAt"] = datetime.now().isoformat()
-            target["authExpiresAt"] = (datetime.now() + timedelta(hours=24)).isoformat()
-
-        if target.get("joinKey") != join_key:
-            return jsonify({"ok": False, "msg": "joinKey 不匹配"}), 403
 
         target["state"] = state
         target["detail"] = detail
@@ -1227,9 +1191,58 @@ def agent_push():
         target["area"] = state_to_area(state)
         target["source"] = "remote-openclaw"
         target["lastPushAt"] = datetime.now().isoformat()
+        target["authStatus"] = "approved"
 
         save_agents_state(agents)
-        return jsonify({"ok": True, "agentId": agent_id, "area": target.get("area")})
+        return jsonify({
+            "ok": True,
+            "agentId": target.get("agentId"),
+            "area": target.get("area"),
+            "remainingSeconds": remaining_seconds,
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "msg": str(e)}), 500
+
+
+OFFICE_CONFIG_KEY = "office:config"
+DEFAULT_OFFICE_NAME = "海辛小龙虾的办公室"
+
+
+@app.route("/office-config", methods=["GET"])
+def get_office_config():
+    """Return office configuration (name, etc.) from Redis.
+
+    The config is persistent (no TTL).
+    """
+    config_data = None
+    if kv_get:
+        config_data = kv_get(OFFICE_CONFIG_KEY)
+    if not config_data:
+        config_data = {"officeName": DEFAULT_OFFICE_NAME}
+    return jsonify({"ok": True, **config_data})
+
+
+@app.route("/office-config", methods=["POST"])
+def set_office_config():
+    """Update office configuration (admin only).
+
+    Body: { officeName? }
+    Stored in Redis without TTL (persistent).
+    """
+    guard = _require_asset_editor_auth()
+    if guard:
+        return guard
+
+    try:
+        data = request.get_json()
+        office_name = (data.get("officeName") or "").strip()
+        if not office_name:
+            return jsonify({"ok": False, "msg": "办公室名称不能为空"}), 400
+
+        config_data = {"officeName": office_name}
+        if kv_set:
+            kv_set(OFFICE_CONFIG_KEY, config_data)
+        return jsonify({"ok": True, "officeName": office_name})
     except Exception as e:
         return jsonify({"ok": False, "msg": str(e)}), 500
 
