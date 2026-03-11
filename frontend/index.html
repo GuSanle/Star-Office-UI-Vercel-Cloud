@@ -3832,6 +3832,8 @@
             list.innerHTML = visitors.map(agent => {
                 const name = agent.name || '未命名访客';
                 const authStatus = agent.authStatus || 'pending';
+                const presenceStatus = agent.presenceStatus || (authStatus === 'approved' ? 'online' : 'offline');
+                const displayStatus = authStatus === 'approved' && presenceStatus === 'offline' ? 'offline' : authStatus;
                 const state = agent.state || 'idle';
                 const statusMap = {
                     approved: '已授权',
@@ -3849,7 +3851,7 @@
                     error: '报警'
                 };
 
-                const statusText = statusMap[authStatus] || authStatus;
+                const statusText = statusMap[displayStatus] || displayStatus;
                 const stateText = stateMap[state] || state;
                 const subtitle = `${statusText} · ${stateText}`;
 

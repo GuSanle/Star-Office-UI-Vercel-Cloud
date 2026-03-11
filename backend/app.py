@@ -90,6 +90,7 @@ STATE_TO_AREA_MAP = {
     "syncing": "writing",
     "error": "error",
 }
+PRESENCE_TTL_SECONDS = int(os.getenv("AGENT_PRESENCE_TTL_SECONDS", "180"))
 
 
 app = Flask(__name__, static_folder=FRONTEND_DIR, static_url_path="/static")
@@ -815,6 +816,31 @@ def state_to_area(state):
     return STATE_TO_AREA_MAP.get(state, "breakroom")
 
 
+def _presence_key(secret):
+    return f"presence:{secret}"
+
+
+def get_presence_status(agent, now=None):
+    """Derive online/offline presence independently from authStatus."""
+    secret = (agent or {}).get("secret", "")
+    if secret and kv_ttl:
+        ttl = kv_ttl(_presence_key(secret))
+        if ttl > 0:
+            return "online"
+        return "offline"
+
+    last_push_at_str = (agent or {}).get("lastPushAt")
+    if last_push_at_str:
+        try:
+            ref_now = now or datetime.now()
+            last_push_at = datetime.fromisoformat(last_push_at_str)
+            age = (ref_now - last_push_at).total_seconds()
+            return "online" if age <= PRESENCE_TTL_SECONDS else "offline"
+        except Exception:
+            pass
+    return "offline"
+
+
 # Ensure files exist
 if not os.path.exists(AGENTS_STATE_FILE):
     save_agents_state(DEFAULT_AGENTS)
@@ -844,13 +870,18 @@ def get_agents():
     now = datetime.now()
 
     cleaned_agents = []
+    persisted_agents = []
     keys_data = load_join_keys()
 
     for a in agents:
         if a.get("isMain"):
-            cleaned_agents.append(a)
+            agent_view = dict(a)
+            agent_view["presenceStatus"] = "online"
+            cleaned_agents.append(agent_view)
+            persisted_agents.append(a)
             continue
 
+        agent_view = dict(a)
         auth_expires_at_str = a.get("authExpiresAt")
         auth_status = a.get("authStatus", "pending")
 
@@ -871,20 +902,38 @@ def get_agents():
             except Exception:
                 pass
 
-        # 2) 超时未推送自动离线（超过5分钟）
-        last_push_at_str = a.get("lastPushAt")
-        if auth_status == "approved" and last_push_at_str:
-            try:
-                last_push_at = datetime.fromisoformat(last_push_at_str)
-                age = (now - last_push_at).total_seconds()
-                if age > 300:  # 5分钟无推送自动离线
-                    a["authStatus"] = "offline"
-            except Exception:
-                pass
+        if auth_status == "approved":
+            secret = a.get("secret", "")
+            session_alive = False
+            if secret and kv_ttl:
+                session_alive = kv_ttl(f"session:{secret}") > 0
+            elif auth_expires_at_str:
+                try:
+                    session_alive = now <= datetime.fromisoformat(auth_expires_at_str)
+                except Exception:
+                    session_alive = False
 
-        cleaned_agents.append(a)
+            if not session_alive:
+                a["authStatus"] = "expired"
+                a["state"] = "idle"
+                a["detail"] = "会话已过期"
+                a["area"] = "breakroom"
+                auth_status = "expired"
 
-    save_agents_state(cleaned_agents)
+        if auth_status == "approved":
+            presence_status = get_presence_status(a, now=now)
+            agent_view["presenceStatus"] = presence_status
+            if presence_status == "offline":
+                # 离线只影响看板展示，不影响授权状态与身份
+                agent_view["area"] = "breakroom"
+                agent_view["state"] = "idle"
+        else:
+            agent_view["presenceStatus"] = "offline"
+
+        cleaned_agents.append(agent_view)
+        persisted_agents.append(a)
+
+    save_agents_state(persisted_agents)
     save_join_keys(keys_data)
 
     return jsonify(cleaned_agents)
@@ -975,6 +1024,8 @@ def agent_reject():
         if not target:
             return jsonify({"ok": False, "msg": "未找到 agent"}), 404
 
+        secret = target.get("secret", "")
+
         target["authStatus"] = "rejected"
         target["authRejectedAt"] = datetime.now().isoformat()
 
@@ -991,6 +1042,10 @@ def agent_reject():
 
         # Remove from agents list
         agents = [a for a in agents if a.get("agentId") != agent_id or a.get("isMain")]
+
+        if secret and kv_delete:
+            kv_delete(f"session:{secret}")
+            kv_delete(_presence_key(secret))
 
         save_agents_state(agents)
         save_join_keys(keys_data)
@@ -1101,6 +1156,8 @@ def leave_agent():
         if not target:
             return jsonify({"ok": False, "msg": "没有找到要离开的 agent"}), 404
 
+        secret = target.get("secret", "")
+
         join_key = target.get("joinKey")
         new_agents = [a for a in agents if a.get("isMain") or a.get("agentId") != target.get("agentId")]
 
@@ -1113,6 +1170,10 @@ def leave_agent():
                 key_item["usedBy"] = None
                 key_item["usedByAgentId"] = None
                 key_item["usedAt"] = None
+
+        if secret and kv_delete:
+            kv_delete(f"session:{secret}")
+            kv_delete(_presence_key(secret))
 
         save_agents_state(new_agents)
         save_join_keys(keys_data)
@@ -1155,6 +1216,7 @@ def agent_push():
 
         # Check Redis session
         session_key = f"session:{secret}"
+        presence_key = _presence_key(secret)
         remaining_seconds = -2
 
         if kv_ttl:
@@ -1198,12 +1260,19 @@ def agent_push():
         target["lastPushAt"] = datetime.now().isoformat()
         target["authStatus"] = "approved"
 
+        if kv_set_with_ttl:
+            kv_set_with_ttl(presence_key, {
+                "agentId": target.get("agentId"),
+                "lastPushAt": target["lastPushAt"],
+            }, PRESENCE_TTL_SECONDS)
+
         save_agents_state(agents)
         return jsonify({
             "ok": True,
             "agentId": target.get("agentId"),
             "area": target.get("area"),
             "remainingSeconds": remaining_seconds,
+            "presenceTtlSeconds": PRESENCE_TTL_SECONDS,
         })
     except Exception as e:
         return jsonify({"ok": False, "msg": str(e)}), 500
@@ -2121,4 +2190,3 @@ if __name__ == "__main__":
     print("=" * 50)
 
     app.run(host="0.0.0.0", port=backend_port, debug=False)
-

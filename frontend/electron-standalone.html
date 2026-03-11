@@ -4343,12 +4343,15 @@ function toggleBrokerPanel() {
             list.innerHTML = visitors.map(agent => {
                 const name = agent.name || '未命名访客';
                 const authStatus = agent.authStatus || 'pending';
+                const presenceStatus = agent.presenceStatus || (authStatus === 'approved' ? 'online' : 'offline');
+                const displayStatus = authStatus === 'approved' && presenceStatus === 'offline' ? 'offline' : authStatus;
                 const state = agent.state || 'idle';
                 const statusMap = {
                     approved: '已授权',
                     pending: '待授权',
                     rejected: '已拒绝',
-                    offline: '离线'
+                    offline: '离线',
+                    expired: '已过期'
                 };
                 const stateMap = {
                     idle: '待命',
@@ -4359,7 +4362,7 @@ function toggleBrokerPanel() {
                     error: '报警'
                 };
 
-                const statusText = statusMap[authStatus] || authStatus;
+                const statusText = statusMap[displayStatus] || displayStatus;
                 const stateText = stateMap[state] || state;
                 const subtitle = `${statusText} · ${stateText}`;
 

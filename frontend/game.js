@@ -217,6 +217,7 @@ const NAME_TAG_COLORS = {
   pending: 0xf59e0b,
   rejected: 0xef4444,
   offline: 0x64748b,
+  expired: 0x94a3b8,
   default: 0x1f2937
 };
 
@@ -953,6 +954,8 @@ function renderAgent(agent) {
   const name = agent.name || 'Agent';
   const area = agent.area || 'breakroom';
   const authStatus = agent.authStatus || 'pending';
+  const presenceStatus = agent.presenceStatus || (authStatus === 'approved' ? 'online' : 'offline');
+  const displayStatus = authStatus === 'approved' && presenceStatus === 'offline' ? 'offline' : authStatus;
   const isMain = !!agent.isMain;
 
   // 获取这个 agent 在区域里的位置
@@ -962,13 +965,14 @@ function renderAgent(agent) {
 
   // 颜色
   const bodyColor = AGENT_COLORS[agentId] || AGENT_COLORS.default;
-  const nameColor = NAME_TAG_COLORS[authStatus] || NAME_TAG_COLORS.default;
+  const nameColor = NAME_TAG_COLORS[displayStatus] || NAME_TAG_COLORS.default;
 
   // 透明度（离线/待批准/拒绝时变半透明）
   let alpha = 1;
-  if (authStatus === 'pending') alpha = 0.7;
-  if (authStatus === 'rejected') alpha = 0.4;
-  if (authStatus === 'offline') alpha = 0.5;
+  if (displayStatus === 'pending') alpha = 0.7;
+  if (displayStatus === 'rejected') alpha = 0.4;
+  if (displayStatus === 'offline') alpha = 0.5;
+  if (displayStatus === 'expired') alpha = 0.45;
 
   if (!agents[agentId]) {
     // 新建 agent
@@ -995,10 +999,11 @@ function renderAgent(agent) {
 
     // 状态小点（绿色/黄色/红色）
     let dotColor = 0x64748b;
-    if (authStatus === 'approved') dotColor = 0x22c55e;
-    if (authStatus === 'pending') dotColor = 0xf59e0b;
-    if (authStatus === 'rejected') dotColor = 0xef4444;
-    if (authStatus === 'offline') dotColor = 0x94a3b8;
+    if (displayStatus === 'approved') dotColor = 0x22c55e;
+    if (displayStatus === 'pending') dotColor = 0xf59e0b;
+    if (displayStatus === 'rejected') dotColor = 0xef4444;
+    if (displayStatus === 'offline') dotColor = 0x94a3b8;
+    if (displayStatus === 'expired') dotColor = 0x6b7280;
     const statusDot = game.add.circle(20, -20, 5, dotColor, alpha);
     statusDot.setStrokeStyle(2, 0x000000, alpha);
     statusDot.name = 'statusDot';
@@ -1016,16 +1021,17 @@ function renderAgent(agent) {
     const nameTag = container.getAt(2);
     if (nameTag && nameTag.name === 'nameTag') {
       nameTag.setText(name);
-      nameTag.setFill('#' + (NAME_TAG_COLORS[authStatus] || NAME_TAG_COLORS.default).toString(16).padStart(6, '0'));
+      nameTag.setFill('#' + (NAME_TAG_COLORS[displayStatus] || NAME_TAG_COLORS.default).toString(16).padStart(6, '0'));
     }
     // 更新状态点颜色
     const statusDot = container.getAt(1);
     if (statusDot && statusDot.name === 'statusDot') {
       let dotColor = 0x64748b;
-      if (authStatus === 'approved') dotColor = 0x22c55e;
-      if (authStatus === 'pending') dotColor = 0xf59e0b;
-      if (authStatus === 'rejected') dotColor = 0xef4444;
-      if (authStatus === 'offline') dotColor = 0x94a3b8;
+      if (displayStatus === 'approved') dotColor = 0x22c55e;
+      if (displayStatus === 'pending') dotColor = 0xf59e0b;
+      if (displayStatus === 'rejected') dotColor = 0xef4444;
+      if (displayStatus === 'offline') dotColor = 0x94a3b8;
+      if (displayStatus === 'expired') dotColor = 0x6b7280;
       statusDot.fillColor = dotColor;
     }
   }

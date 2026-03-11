@@ -155,7 +155,7 @@ def get_office_name():
 ```python
 def kick_agent(agent_id: str, name: str = ""):
     """强制踢出一个 agent"""
-    res = admin.post(f"{CLOUD_ENDPOINT}/agent-leave", json={
+    res = admin.post(f"{CLOUD_ENDPOINT}/leave-agent", json={
         "agentId": agent_id,
         "name": name
     }).json()
@@ -263,7 +263,7 @@ for a in expired:
 | `/agents` | GET | ❌ | 查看所有 agent |
 | `/agent-approve` | POST | ✅ | 批准 agent（需 agentId + durationMinutes） |
 | `/agent-reject` | POST | ✅ | 拒绝 agent |
-| `/agent-leave` | POST | ✅ | 踢出 agent |
+| `/leave-agent` | POST | ✅ | 踢出 agent |
 | `/office-config` | GET | ❌ | 查看办公室名称 |
 | `/office-config` | POST | ✅ | 修改办公室名称 |
 | `/set_state` | POST | ❌ | 设置 Star 状态 |
